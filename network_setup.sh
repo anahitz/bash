@@ -1,54 +1,62 @@
 #!/bin/bash
 
-# Предупреждение о потенциальных рисках
-echo "Внимание! Выполнение этого скрипта может привести к потере сетевого подключения."
-echo "Убедитесь, что вы осознаете свои действия и имеете резервную копию конфигурационных файлов."
-read -p "Продолжить? (y/n): " -n 1 -r
-echo ""
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-  echo "Продолжение..."
-else
-  echo "Отмена."
+# Функция для вывода сообщения об ошибке и выхода из скрипта
+error_exit() {
+  echo "Ошибка: $1" >&2
   exit 1
-fi
+}
 
-# Проверка прав доступа
+# Функция для логирования действий скрипта
+log() {
+  timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+  echo "$timestamp: $1" >> /var/log/network_setup.log
+}
+
+# Проверка наличия root-прав
 if [[ $EUID -ne 0 ]]; then
-  echo "Недостаточно прав. Запустите скрипт с правами суперпользователя (sudo)."
+  error_exit "Для выполнения этого скрипта требуются права root. Используйте sudo."
+fi
+
+# Получение аргументов командной строки
+NEW_IP=$1
+NEW_NETMASK=$2
+NEW_GATEWAY=$3
+INTERFACE=$4
+
+# Проверка наличия всех необходимых аргументов
+if [[ -z "$NEW_IP" || -z "$NEW_NETMASK" || -z "$NEW_GATEWAY" || -z "$INTERFACE" ]]; then
+  echo "Необходимо указать IP-адрес, маску подсети, шлюз и интерфейс."
+  echo "Использование: $0 <new_ip> <new_netmask> <new_gateway> <interface>"
   exit 1
 fi
 
-# Переменные для хранения новых настроек сети
-NEW_IP="$1"
-NEW_NETMASK="$2"
-NEW_GATEWAY="$3"
+# Создание резервной копии файла конфигурации
+cp /etc/network/interfaces /etc/network/interfaces.bak || error_exit "Не удалось создать резервную копию /etc/network/interfaces"
+log "Создана резервная копия /etc/network/interfaces"
 
-# Резервное копирование файла /etc/network/interfaces
-cp /etc/network/interfaces /etc/network/interfaces.bak
+# Изменение конфигурации сети
+sed -i "s/address\s\+.*$/address $NEW_IP/g" /etc/network/interfaces || error_exit "Не удалось изменить IP-адрес."
+sed -i "s/netmask\s\+.*$/netmask $NEW_NETMASK/g" /etc/network/interfaces || error_exit "Не удалось изменить маску подсети."
+sed -i "s/gateway\s\+.*$/gateway $NEW_GATEWAY/g" /etc/network/interfaces || error_exit "Не удалось изменить шлюз."
+log "Конфигурация сети успешно изменена в /etc/network/interfaces"
 
-# Замена IP-адреса в файле /etc/network/interfaces
-if [[ ! -z "$NEW_IP" ]]; then
-  sed -i "s/address.*$/address $NEW_IP/g" /etc/network/interfaces
-fi
+# Перезапуск сетевых служб
+systemctl restart networking || error_exit "Не удалось перезапустить сетевые службы."
+log "Сетевые службы перезапущены."
 
-# Получение текущей сетевой конфигурации
-NETWORK_INFO=$(ip -4 a show | grep -Eo 'inet (.*?)/.*')
+# Получение информации о текущей сетевой конфигурации
+NETWORK_INFO=$(ip -4 addr show dev $INTERFACE | grep inet)
 
 # Форматирование вывода
-echo "Текущая сетевая конфигурация:"
-echo "IP-адрес: $NETWORK_INFO"
+echo "Текущая сетевая конфигурация для $INTERFACE:"
+echo "$NETWORK_INFO"
 
-# Вывод сообщения об успешном завершении
-echo "Конфигурация сети была успешно изменена."
+# Вывод сообщения об успешном завершении задачи
+echo "Конфигурация сети успешно изменена."
 
 # Логирование действий
-echo "Дата: $(date)" >> /var/log/network_setup.log
-echo "Скрипт: network_setup.sh" >> /var/log/network_setup.log
-echo "Новый IP-адрес: $NEW_IP" >> /var/log/network_setup.log
-echo "Новая маска подсети: $NEW_NETMASK" >> /var/log/network_setup.log
-echo "Новый шлюз: $NEW_GATEWAY" >> /var/log/network_setup.log
+log "Скрипт network_setup.sh был успешно выполнен."
 
-# Перезагрузка сетевого интерфейса
-systemctl restart networking
-
-exit 0
+# Предупреждение пользователя
+echo "Предупреждение: Изменение сетевой конфигурации может повлиять на подключение к сети."
+echo "Проверьте, что вы осознаете свои действия."
